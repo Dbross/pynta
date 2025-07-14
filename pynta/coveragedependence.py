@@ -8,8 +8,6 @@ from acat.adsorption_sites import SlabAdsorptionSites
 from pynta.utils import get_unique_sym, get_occupied_sites, sites_match, SiteOccupationException
 from pynta.mol import *
 from pynta.geometricanalysis import *
-from pynta.tasks import *
-from pynta.postprocessing import get_adsorbate_energies
 from pysidt import *
 from pysidt.extensions import split_mols
 from pysidt.sidt import *
@@ -99,7 +97,7 @@ def get_unstable_pairs(pairsdir,adsorbate_dir,sites,site_adjacency,nslab,max_dis
                                 config_show.append(final)
                             continue
                         #gout.update(sort_atoms=False)
-                    except (FindingPathError, SiteOccupationException):
+                    except (FindingPathError, SiteOccupationException, TooManyElectronsException):
                         continue
                     except FailedFixBondsException: #Pynta is unable to understand the final structure in a resonance sense...definitely not isomorphic
                         logging.error("Failed to fix bonds for structure: {}".format(p))
@@ -187,7 +185,7 @@ def copy_stable_pairs(pairsdir,sites,site_adjacency,nslab,max_dist=3.0):
 
     return None
 
-def generate_pair_geometries(adpath1,adpath2,slabpath,metal,facet,adinfo1=None,adinfo2=None,
+def generate_pair_geometries(adpath1,adpath2,slabpath,metal,facet,sites,site_adjacency,adinfo1=None,adinfo2=None,
                              max_dist=3.0,imag_freq_max=150.0,symmetric=None):
     """
     adpath1 can be bidentate
@@ -196,11 +194,6 @@ def generate_pair_geometries(adpath1,adpath2,slabpath,metal,facet,adinfo1=None,a
     #slab information
     slab = read(slabpath)
     nslab = len(slab)
-    cas = SlabAdsorptionSites(slab,facet,allow_6fold=False,composition_effect=False,
-                            label_sites=True,
-                            surrogate_metal=metal)
-    sites = cas.get_sites()
-    site_adjacency = cas.get_neighbor_site_list()
     
     adsorbate_dir = os.path.split(adpath2)[0]
     allowed_structure_site_structures = generate_allowed_structure_site_structures(adsorbate_dir,sites,site_adjacency,nslab,max_dist=max_dist)
@@ -368,11 +361,7 @@ def generate_pair_geometries(adpath1,adpath2,slabpath,metal,facet,adinfo1=None,a
                     ad1_to_ad2_sites[j][i] = []
                     ad1_to_ad2_heights[j][i] = []
         
-                cas = SlabAdsorptionSites(ad2,facet,allow_6fold=False,composition_effect=False,
-                                    label_sites=True,
-                                    surrogate_metal=metal)
-                sites2 = cas.get_sites()
-                occ = get_occupied_sites(ad2,sites2,nslab)
+                occ = get_occupied_sites(ad2,sites,nslab)
                 occsite = None
                 
                 for s in occ:
@@ -630,14 +619,14 @@ def get_unique_site_pair_inds(site_pairs,slab,tol=0.15):
 
     return unique_inds
 
-def setup_pair_opts_for_rxns(targetdir,tsdirs,coadnames,metal,facet,max_dist=3.0,imag_freq_max=150.0):
+def setup_pair_opts_for_rxns(targetdir,adsorbates,tsdirs,coadnames,metal,facet,sites,site_adjacency,max_dist=3.0,imag_freq_max=150.0):
     pairdir = os.path.join(targetdir,"pairs")
     addir = os.path.join(os.path.split(os.path.split(tsdirs[0])[0])[0],"Adsorbates")
     slabpath = os.path.join(os.path.split(os.path.split(tsdirs[0])[0])[0],"slab.xyz")
     if not os.path.exists(pairdir):
         os.makedirs(pairdir)
     
-    ads = set()  
+    ads = set(adsorbates)
     combs = []
     for tsdir in tsdirs:
         for coadname in coadnames:
@@ -679,15 +668,15 @@ def setup_pair_opts_for_rxns(targetdir,tsdirs,coadnames,metal,facet,max_dist=3.0
                 ds = [os.path.join(addir,x) for x in s]
             else:
                 ds = [s[0],os.path.join(addir,s[1])]
-            pairs,pairmols,pairxyzs = generate_pair_geometries(ds[0],ds[1],slabpath,metal,facet,
+            pairs,pairmols,pairxyzs = generate_pair_geometries(ds[0],ds[1],slabpath,metal,facet,sites,site_adjacency,
                                  max_dist=max_dist,imag_freq_max=imag_freq_max)
             for i,pair in enumerate(pairs):
                 os.makedirs(os.path.join(namedir,str(i)))
                 write(os.path.join(namedir,str(i),"init.xyz"), pair)
                 if not is_ts:
-                    moldict = {"adjlist": pairmols[i].to_adjacency_list(),"xyz": pairxyzs[i]}
+                    moldict = {"adjlist": pairmols[i].to_adjacency_list(),"xyz": pairxyzs[i], "coadname": s[1]}
                 else:
-                    moldict = {"adjlist": pairmols[i].to_adjacency_list(),"tsdir": s[0], "xyz": pairxyzs[i]}
+                    moldict = {"adjlist": pairmols[i].to_adjacency_list(),"tsdir": s[0], "xyz": pairxyzs[i], "coadname": s[1]}
                 with open(os.path.join(namedir,str(i),"info.json"),'w') as f:
                     json.dump(moldict,f)
                 if not is_ts:
@@ -778,7 +767,7 @@ def get_adsorbate_ts_information(xyz,slabxyz,is_ts,
     
     return ad,admol,neighbor_sites_2D,ninds,actual_occ,neighbor_sites,aseinds,slab,nslab
 
-def get_coadsorbate_information(coadnames,ads_dir,neighbor_sites,sites,site_adjacency,nslab,slab):
+def get_coadsorbate_information(coadnames,ads_dir,neighbor_sites,sites,site_adjacency,nslab,slab,imag_freq_max=150.0):
     coad_to_stable_neighbor_sites = dict()
     coad_site_stable_parameters = {name:[] for name in coadnames}
     coad_atom_to_molecule_surface_atom_map = dict()
@@ -796,7 +785,7 @@ def get_coadsorbate_information(coadnames,ads_dir,neighbor_sites,sites,site_adja
         atom_to_molecule_surface_atom_map = {int(key):int(val) for key,val in infocoad["gratom_to_molecule_surface_atom_map"].items()}
         coads = get_unique_adsorbate_geometries(coaddir,Molecule().from_adjacency_list(infocoad["adjlist"]),
                                sites,site_adjacency,atom_to_molecule_surface_atom_map,
-                               nslab)
+                               nslab,imag_freq_max=imag_freq_max)
         atom_to_molecule_surface_atom_map = {int(key):int(val) for key,val in infocoad["gratom_to_molecule_surface_atom_map"].items()}
         coad_atom_to_molecule_surface_atom_map[coadname] = atom_to_molecule_surface_atom_map
         coads_dict[coadname] = coads
@@ -1073,38 +1062,6 @@ def configuration_is_valid(mol2D,admol,is_ts,unstable_pairs):
 
     return all(validity_judgements)
 
-def get_best_adsorbate_xyz(adsorbate_path,sites,nslab):
-    """
-    load the adsorbates associated with the reaction and find the unique optimized
-    adsorbate structures for each species
-    returns a dictionary mapping each adsorbate name to a list of ase.Atoms objects
-    """
-    prefixes = os.listdir(adsorbate_path)
-    with open(os.path.join(adsorbate_path,"info.json"),"r") as f:
-        info = json.load(f)
-    ase_to_mol_surface_atom_map = {int(k):int(v) for k,v in info["gratom_to_molecule_surface_atom_map"].items()}
-    mol = Molecule().from_adjacency_list(info["adjlist"])
-    geoms = []
-    for prefix in prefixes:
-        path = os.path.join(adsorbate_path,prefix,prefix+".xyz")
-        if os.path.exists(path):
-            geoms.append(path)
-    xyzs = get_unique_sym(geoms)
-    adsorbate = None
-    min_energy = np.inf
-    Es,_,freq = get_adsorbate_energies(adsorbate_path)
-    for xyz in xyzs:
-        geo = read(xyz)
-        strind = os.path.split(xyz)[1].split(".")[0]
-        occ = get_occupied_sites(geo,sites,nslab)
-        required_surface_inds = set([ind+nslab for ind in ase_to_mol_surface_atom_map.keys()])
-        found_surface_inds = set([site["bonding_index"] for site in occ])
-        if len(occ) >= len(mol.get_adatoms()) and required_surface_inds.issubset(found_surface_inds):
-            if Es[strind] < min_energy:
-                adsorbate = xyz
-                min_energy = Es[strind]
-
-    return adsorbate
 
 def adsorbate_interaction_decomposition(mol,local_radius=5):
     surface_bonded_inds = []
@@ -2072,36 +2029,37 @@ def process_calculation(d,ad_energy_dict,slab,metal,facet,sites,site_adjacency,p
     
     return datum_E,datums_stability
 
-def get_configs_for_calculation(configs_of_concern_by_admol,Ncoad_energy_by_admol,admol_name_structure_dict,
+def get_configs_for_calculation(configs_of_concern_by_coad_admol,Ncoad_energy_by_coad_admol,admol_name_structure_dict,coadnames,
                                 computed_configs,tree_regressor,Ncalc_per_iter,T=5000.0,calculation_selection_iterations=10):
     group_to_occurence = dict()
     configs_of_concern = []
-    for admol_name in configs_of_concern_by_admol.keys():
-        admol = admol_name_structure_dict[admol_name]
-        Nocc_isolated = len([a for a in admol.atoms if a.is_surface_site() and any(not a2.is_surface_site() for a2 in a.bonds.keys())])
-        configs_of_concern_admol = configs_of_concern_by_admol[admol_name]
-        group_to_occurence_admol = dict()
-        N = 0 #number of group contributions associated with given admol
-        for v in configs_of_concern_admol:
-            m = v[0]
-            E = v[1]
-            sigma = v[3]
-            grps = v[2]
-            Nocc = len([a for a in m.atoms if a.is_surface_site() and any(not a2.is_surface_site() for a2 in a.bonds.keys())])
-            configs_of_concern.append(v)
-            Emin = Ncoad_energy_by_admol[admol_name][Nocc-Nocc_isolated]
-            for grp in grps:
-                if grp in group_to_occurence_admol:
-                    group_to_occurence_admol[grp] += np.exp(-(E-Emin)/(8.314*T))
-                    N += 1
+    for coadname in coadnames:
+        for admol_name in configs_of_concern_by_coad_admol[coadname].keys():
+            admol = admol_name_structure_dict[admol_name]
+            Nocc_isolated = len([a for a in admol.atoms if a.is_surface_site() and any(not a2.is_surface_site() for a2 in a.bonds.keys())])
+            configs_of_concern_admol = configs_of_concern_by_coad_admol[coadname][admol_name]
+            group_to_occurence_admol = dict()
+            N = 0 #number of group contributions associated with given admol
+            for v in configs_of_concern_admol:
+                m = v[0]
+                E = v[1]
+                sigma = v[3]
+                grps = v[2]
+                Nocc = len([a for a in m.atoms if a.is_surface_site() and any(not a2.is_surface_site() for a2 in a.bonds.keys())])
+                configs_of_concern.append(v)
+                Emin = Ncoad_energy_by_coad_admol[coadname][admol_name][Nocc-Nocc_isolated]
+                for grp in grps:
+                    if grp in group_to_occurence_admol:
+                        group_to_occurence_admol[grp] += np.exp(-(E-Emin)/(8.314*T))
+                        N += 1
+                    else:
+                        group_to_occurence_admol[grp] = np.exp(-(E-Emin)/(8.314*T))
+                        N += 1
+            for g,n in group_to_occurence_admol.items():
+                if grp in group_to_occurence:
+                    group_to_occurence[grp] += n/N
                 else:
-                    group_to_occurence_admol[grp] = np.exp(-(E-Emin)/(8.314*T))
-                    N += 1
-        for g,n in group_to_occurence_admol.items():
-            if grp in group_to_occurence:
-                group_to_occurence[grp] += n/N
-            else:
-                group_to_occurence[grp] = n/N 
+                    group_to_occurence[grp] = n/N 
                     
     concern_groups = list(group_to_occurence.keys()) #selected ordering
         
@@ -2155,91 +2113,24 @@ def get_configs_for_calculation(configs_of_concern_by_admol,Ncoad_energy_by_admo
                         group_fract_for_calculation[maxarglocal] = group_fract
                         configs_for_calculation[maxarglocal] = config
                         maxval = maxvallocal
-        
-    admol_to_config_for_calculation = dict()
+
+    coad_admol_to_config_for_calculation = dict()
     for config in configs_for_calculation:
-        for admol_name,v in configs_of_concern_by_admol.items():
-            if any(x[0] is config for x in v):
-                if admol_name in admol_to_config_for_calculation.keys():
-                    admol_to_config_for_calculation[admol_name].append(config)
-                else:
-                    admol_to_config_for_calculation[admol_name] = [config]
+        found = False
+        for coadname in coadnames:
+            coad_admol_to_config_for_calculation[coadname] = dict()
+            for admol_name,v in configs_of_concern_by_coad_admol[coadname].items():
+                if any(x[0] is config for x in v):
+                    if admol_name in coad_admol_to_config_for_calculation[coadname].keys():
+                        coad_admol_to_config_for_calculation[coadname][admol_name].append(config)
+                    else:
+                        coad_admol_to_config_for_calculation[coadname][admol_name] = [config]
+                    found = True
+                    break
+            if found:
                 break
         else:
             raise ValueError
 
-    return configs_for_calculation,admol_to_config_for_calculation
+    return configs_for_calculation,coad_admol_to_config_for_calculation
 
-def mol_to_atoms(admol,slab,sites,metal,partial_atoms=None,partial_admol=None):
-    """Generate a 3D initial guess for a given 2D admol configuration
-
-    Args:
-        admol (_type_): 2D representation of the configuration
-        slab (_type_): 3D Atoms object for the slab
-        sites (_type_): list of sites
-        metal (_type_): metal of the slab
-        partial_atoms (_type_, optional): a 3D Atoms object representing part of the target configuraitons. Defaults to None.
-        partial_admol (_type_, optional): 2D representation of the partial_atoms Atoms object. Defaults to None.
-
-    Raises:
-        ValueError: _description_
-        ValueError: _description_
-
-    Returns:
-        _type_: Atoms object corresponding to the admol 2D configuration
-    """
-    if partial_atoms and partial_admol:
-        atoms = deepcopy(partial_atoms)
-        gpartial_admol = partial_admol.to_group()
-        admol_atom_order = admol.atoms[:]
-        gpartial_admol_order = gpartial_admol.atoms[:]
-        initial_map = dict()
-        for i,a in enumerate(admol.atoms):
-            if a.is_surface_site():
-                assert a.site == gpartial_admol.atoms[i].site[0]
-                initial_map[a] = gpartial_admol.atoms[i]
-        try:
-            subisos = admol.find_subgraph_isomorphisms(gpartial_admol,initial_map=initial_map,save_order=True)
-        except ValueError:
-            subisos = admol.find_subgraph_isomorphisms(gpartial_admol,initial_map=initial_map)
-            admol.atoms = admol_atom_order
-            gpartial_admol.atoms = gpartial_admol_order
-        if len(subisos) == 0:
-            raise ValueError("partial_admol is not subgraph isomorphic to admol: {0}, {1}".format(gpartial_admol.to_adjacency_list(),admol.to_adjacency_list()))
-        subiso = subisos[0]
-        atoms_in_partial = [a for a in subiso.keys() if not a.is_surface_site()]
-        split_structs,adsorbed_atom_dict = split_adsorbed_structures(admol,clear_site_info=False,adsorption_info=True,atoms_to_skip=atoms_in_partial)
-    elif partial_atoms is None and partial_admol is None:
-        atoms = deepcopy(slab)
-        split_structs,adsorbed_atom_dict = split_adsorbed_structures(admol,clear_site_info=False,adsorption_info=True)
-    else:
-        raise ValueError("Must include both partial_atoms, partial_admol to start from partial")
-    
-    for st in split_structs:
-        if len(st.atoms) == 0:
-            continue
-        ad,mol_to_atoms_map = get_adsorbate(st)
-        
-        if len(st.atoms) > 2: #not atomic adsorbate
-            rot_vec = np.array([0.0,0.0,0.0])
-            for atst in st.atoms:
-                if atst.is_bonded_to_surface():
-                    adatom_molind = st.atoms.index(atst)
-                    for bdat in atst.bonds.keys():
-                        if not bdat.is_surface_site():
-                            rot_vec += ad.positions[mol_to_atoms_map[st.atoms.index(bdat)]] - ad.positions[mol_to_atoms_map[adatom_molind]]
-            rot_vec /= np.linalg.norm(rot_vec)
-            ad.rotate(rot_vec,[0.0,0.0,1.0]) #rotate bonds toward the +z-axis
-        else:
-            adatom_molind = st.atoms.index([a for a in st.atoms if not a.is_surface_site()][0])
-
-        atom_surf_inds = []
-        ad_sites = []
-        for a,sind in adsorbed_atom_dict.items():
-            if a in st.atoms:
-                assert sites[sind]["site"] == a.site, (admol.to_adjacency_list(),partial_admol.to_adjacency_list())
-                atom_surf_inds.append(mol_to_atoms_map[adatom_molind])
-                ad_sites.append(sites[sind])
-        atoms,_,_ = place_adsorbate(ad,atoms,atom_surf_inds,ad_sites,metal)
-
-    return atoms

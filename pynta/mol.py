@@ -1,4 +1,4 @@
-from molecule.molecule import Molecule,Atom,Bond
+from molecule.molecule import Molecule,Atom,Bond,GroupBond,ATOMTYPES
 from ase.io import read, write
 from ase.data import covalent_radii
 from ase import Atoms
@@ -20,7 +20,7 @@ from copy import deepcopy
 import numpy as np
 import random
 import itertools
-
+import logging
 
 def get_desorbed_with_map(mol):
     molcopy = mol.copy(deep=True)
@@ -229,7 +229,25 @@ def add_adsorbate_to_site(atoms, adsorbate, surf_ind, site, height=None,
         shift = (atoms.positions[-2] - atoms.positions[-1]) / 2
         atoms.positions[-2:,:] += shift
 
-
+def place_adsorbate_covdep(ads,slab,atom_surf_inds,sites,metal):
+    if len(atom_surf_inds) == 1:
+        geo = slab.copy()
+        h = get_site_bond_length(sites[0]["site"],ads.get_chemical_symbols()[atom_surf_inds[0]],metal)
+        add_adsorbate_to_site(geo, ads, atom_surf_inds[0], sites[0], height=h)
+        return geo,h,None
+    elif len(atom_surf_inds) == 2:
+        geo = slab.copy()
+        h1 = get_site_bond_length(sites[0]["site"],ads.get_chemical_symbols()[atom_surf_inds[0]],metal)
+        h2 = get_site_bond_length(sites[1]["site"],ads.get_chemical_symbols()[atom_surf_inds[1]],metal)
+        ori = get_mic(sites[0]['position'], sites[1]['position'], geo.cell)
+        add_adsorbate_to_site(geo, deepcopy(ads), atom_surf_inds[0], sites[0], height=h1, orientation=ori)
+        if np.isnan(geo.positions).any(): #if nans just ignore orientation and let it optimize
+            geo = slab.copy()
+            add_adsorbate_to_site(geo, deepcopy(ads), atom_surf_inds[0], sites[0], height=h1, orientation=None)
+        return geo,h1,h2
+    else:
+        raise ValueError
+    
 def get_unique_sites(site_list, cell, unique_composition=False,
                          unique_subsurf=False,
                          return_signatures=False,
@@ -696,7 +714,7 @@ def get_name(mol):
     try:
         return mol.to_smiles()
     except:
-        return mol.to_adjacency_list().replace("\n"," ")[:-1]
+        return mol.to_adjacency_list().replace("\n"," ")[:-1].replace(' ','')
 
 
 def remove_slab(mol,remove_slab_bonds=False,update_atomtypes=True):
@@ -977,6 +995,8 @@ def get_labeled_full_TS_mol(template,mol):
     and an unlabeled slab resolved Molecule object 
     """
     m = mol.copy(deep=True)
+    m_single = m.to_single_bonds(raise_atomtype_exception=False)
+    m_single.multiplicity = 1
     
     tempmol_mol_map = []
     tempmols = [x for x in template.split() if not x.is_surface_site()]
@@ -984,12 +1004,31 @@ def get_labeled_full_TS_mol(template,mol):
     for tempmol in tempmols:
         if tempmol.multiplicity == -187: #handle surface molecules
             tempmol.multiplicity = tempmol.get_radical_count() + 1
-        tempgrps.append(tempmol.to_group())
+        tgp = tempmol.to_single_bonds(raise_atomtype_exception=False).to_group()
+        for i in range(len(tempmol.atoms)):
+            tgp.atoms[i].label = tempmol.atoms[i].label
+        for a in tgp.atoms:
+            if a.is_surface_site():
+                a.atomtype = [ATOMTYPES["X"]]
+        tgp.multiplicity = [1]
+        tempgrps.append(tgp)
 
     map_list = []
-    for tempgrp in tempgrps:
-        mapvs = m.find_subgraph_isomorphisms(tempgrp,save_order=True)
-        map_list.append(mapvs)
+    for i,tempgrp in enumerate(tempgrps):
+        mapvs = m_single.find_subgraph_isomorphisms(tempgrp,save_order=True)
+        if len(mapvs) == 0 and len(tempgrp.get_surface_sites()) == 2: #the molecule may bind two atoms to one site
+            sites = tempgrp.get_surface_sites()
+            for at,bd in sites[1].bonds.items():
+                if not tempgrp.has_bond(at,sites[0]):
+                    b = GroupBond(sites[0],at,order=bd.order)
+                    tempgrp.add_bond(b)
+            tempgrp.remove_atom(sites[1])
+            mapvs = m_single.find_subgraph_isomorphisms(tempgrp,save_order=True)
+        if len(mapvs) == 0:
+            logging.error(m_single.to_adjacency_list())
+            logging.error(tempgrp.to_adjacency_list())
+            raise IndexError
+        map_list.append([{m.atoms[m_single.atoms.index(k)]: v for k,v in x.items()} for x in mapvs]) #remap back to proper not single bonded Molecule
 
     fullmaps = []
     for pd in itertools.product(*map_list):
