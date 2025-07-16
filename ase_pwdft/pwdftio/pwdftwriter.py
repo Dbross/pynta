@@ -154,7 +154,7 @@ def _format_block(key, val, twod_hcurve, lmbfgs, nindent=0):
             if (key, subkey) == ('nwpw', 'brillouin_zone'):
                 out += _format_brillouin_zone(subval)
             else:
-                out += _format_block(subkey, subval, nindent=nindent + 1)
+                out += _format_block(subkey, subval, twod_hcurve, lmbfgs, nindent=nindent + 1)
         else:
             if isinstance(subval, dict):
                 subval = ' '.join([_format_line(a, b)
@@ -265,11 +265,21 @@ def _get_simulation_cell(atoms, **params):
     cell = atoms.cell
     cell_diag = cell.diagonal()
     
-    # Create simulation_cell block with SC (supercell) format
-    # SC format: SC a b c where a, b, c are the cell dimensions in Angstrom
-    nwpw['simulation_cell'] = {
-        'SC': [cell_diag[0], cell_diag[1], cell_diag[2]]
-    }
+    # Check if cell is cubic (all diagonal elements are the same)
+    if np.allclose(cell_diag[0], cell_diag[1]) and np.allclose(cell_diag[1], cell_diag[2]):
+        # Use SC format for cubic cells
+        nwpw['simulation_cell'] = {
+            'SC': cell_diag[0]  # Single value for cubic cell
+        }
+    else:
+        # Use lattice_vectors format for non-cubic cells
+        nwpw['simulation_cell'] = {
+            'lattice_vectors': [
+                [cell[0, 0], cell[0, 1], cell[0, 2]],
+                [cell[1, 0], cell[1, 1], cell[1, 2]],
+                [cell[2, 0], cell[2, 1], cell[2, 2]]
+            ]
+        }
     
     params['nwpw'] = nwpw
     return params
@@ -341,7 +351,7 @@ def write_pwdft_in(fd, atoms, properties=None, echo=True, twod_hcurve=True, lmbf
         else:
             task = 'energy'
 
-    params = _get_simulation_cell(atoms, **params)
+    # params = _get_simulation_cell(atoms, **params)  # Disabled for now
     params = _get_kpts(atoms, **params)
 
     theory = _get_theory(**params)

@@ -5,8 +5,8 @@ https://github.com/ebylaska/PWDFT
 import os
 import numpy as np
 
-from pwdftio.pwdftwriter import write_pwdft_in
-from pwdftio.pwdftreader import read_pwdft_out
+from ase_pwdft.pwdftio.pwdftwriter import write_pwdft_in
+from ase_pwdft.pwdftio.pwdftreader import read_pwdft_out
 from ase.units import Hartree
 from ase.calculators.calculator import FileIOCalculator
 
@@ -40,8 +40,11 @@ class PWDFT(FileIOCalculator):
         # Prepare perm and scratch directories
         perm = os.path.abspath(self.parameters.get('perm', 'perm'))
         scratch = os.path.abspath(self.parameters.get('scratch', 'perm'))
-        os.makedirs(perm, exist_ok=True)
-        os.makedirs(scratch, exist_ok=True)
+        # Ensure directories exist
+        if not os.path.exists(perm):
+            os.makedirs(perm, exist_ok=True)
+        if not os.path.exists(scratch):
+            os.makedirs(scratch, exist_ok=True)
 
         with open(self.label + '.nwxi', 'w') as fd:
             write_pwdft_in(
