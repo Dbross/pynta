@@ -22,7 +22,9 @@ class PWDFT(FileIOCalculator):
     accepts_bandpath_keyword = True  # To Check
     discard_results_on_any_change = True  # To Check
     echo = True
-    twodhcurve = True
+    # Disable by default
+    twodhcurve = False
+    lmbfgs = False
 
     default_parameters = dict()
 
@@ -46,9 +48,22 @@ class PWDFT(FileIOCalculator):
         if not os.path.exists(scratch):
             os.makedirs(scratch, exist_ok=True)
 
+        # Determine if system is periodic (surface or crystal)
+        pbc = getattr(atoms, 'pbc', None)
+        enable_twodhcurve = False
+        enable_lmbfgs = False
+        if pbc is not None:
+            npbc = sum(pbc) if hasattr(pbc, '__iter__') else int(pbc)
+            if npbc == 2 or npbc == 3:
+                enable_twodhcurve = True
+                enable_lmbfgs = True
+
         with open(self.label + '.nwxi', 'w') as fd:
             write_pwdft_in(
-                fd, atoms, properties, **self.parameters)
+                fd, atoms, properties,
+                twod_hcurve=enable_twodhcurve,
+                lmbfgs=enable_lmbfgs,
+                **self.parameters)
 
     def read_results(self):
         output = read_pwdft_out(self.label + '.nwxo')
