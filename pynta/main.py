@@ -41,7 +41,7 @@ class Pynta:
         software_kwargs_gas=None,
         TS_opt_software_kwargs=None,
         harm_f_software="TBLite",
-        harm_f_software_kwargs={"method": "GFN1-xTB"},
+        harm_f_software_kwargs={"method": "GFN1-xTB","verbosity":0},
         irc_mode="fixed", #choose irc mode: 'skip', 'relaxed', 'fixed'
         lattice_opt_software_kwargs={'kpts': (25,25,25), 'ecutwfc': 70, 'degauss':0.02, 'mixing_mode': 'plain'},
         reset_launchpad=False,queue_adapter_path=None,num_jobs=25,max_num_hfsp_opts=None,#max_num_hfsp_opts is mostly for fast testing
