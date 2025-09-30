@@ -1,16 +1,20 @@
 name: pynta_env
 channels:
-  - defaults
-  - mjohnson541
   - conda-forge
+  - defaults
 dependencies:
+
   - python =3.9
   - matplotlib
   - spglib
   - ase =3.22.1
   - scipy >=1.1.0
   - numpy
+  - ase
+  - matplotlib
+  - scipy
   - pyyaml
+
   - sella >=2.2.1
   - jax =0.3
   - sphinx
@@ -24,3 +28,4 @@ dependencies:
   - pysidt >=1
   - ruamel.yaml < 0.18
   - flask =2.2.5
+
