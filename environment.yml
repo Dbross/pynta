@@ -3,9 +3,29 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.8
+
+  - python =3.9
+  - matplotlib
+  - spglib
+  - ase =3.22.1
+  - scipy >=1.1.0
   - numpy
   - ase
   - matplotlib
   - scipy
   - pyyaml
+
+  - sella >=2.2.1
+  - jax =0.3
+  - sphinx
+  - fireworks
+  - tblite
+  - tblite-python
+  - rmgmolecule
+  - acat
+  - nose
+  - coverage
+  - pysidt >=1
+  - ruamel.yaml < 0.18
+  - flask =2.2.5
+
